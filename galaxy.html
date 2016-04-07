@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="koi8-r">
+	<meta http-equiv="X-UA-Compatible" content="IE=edge">
+	<title></title>
+	<style>
+		html, body {
+			width: 100%;
+			height: 100%;
+			margin: 0px;
+			padding: 0px;
+		}
+	</style>
+</head>
+<body>
+<canvas id="plot">Обновите браузер</canvas>
+<script>
+
+	(function() {
+	    var lastTime = 0;
+	    var vendors = ['ms', 'moz', 'webkit', 'o'];
+	    for(var x = 0; x < vendors.length && !window.requestAnimationFrame; ++x) {
+	        window.requestAnimationFrame = window[vendors[x]+'RequestAnimationFrame'];
+	        window.cancelAnimationFrame = window[vendors[x]+'CancelAnimationFrame']  || window[vendors[x]+'CancelRequestAnimationFrame'];
+	    }
+	 
+	    if (!window.requestAnimationFrame)
+	        window.requestAnimationFrame = function(callback, element) {
+	            var currTime = new Date().getTime();
+	            var timeToCall = Math.max(0, 16 - (currTime - lastTime));
+	            var id = window.setTimeout(function() { callback(currTime + timeToCall); }, timeToCall);
+	            lastTime = currTime + timeToCall;
+	            return id;
+	        };
+	 
+	    if (!window.cancelAnimationFrame)
+	        window.cancelAnimationFrame = function(id) {
+	            clearTimeout(id);
+	        };
+	}());
+
+
+	var sin = Math.sin; 
+
+	var game_divider = 2;
+	var game_width = 400;
+	var game_height = 600;
+	var sprite_size = 32;
+	var chips_count = 8;
+	var stars_count = 10;
+	var asteroids_count = 4;
+	var bullets_count = chips_count;
+	var died_count = 0;
+
+	var global_speed = 4;
+
+	var movekey, shotkey
+
+
+	var plot = document.getElementById("plot");
+	var ctx	= plot.getContext('2d');
+	plot.style.display = 'block';
+	plot.width = game_width;
+	plot.height = game_height;
+
+
+	var img_chip = new Image();
+	img_chip.src = 'chip.png';
+
+	var img_my_chip = new Image();
+	img_my_chip.src = 'my_chip.png';
+
+	var img_explode = new Image();
+	img_explode.src = 'explosion.png';
+
+	var img_asteroids = new Image();
+	img_asteroids.src = 'asteroids.png';
+
+	var carp_sprite = new Image();
+	carp_sprite.src = 'carp.png';
+
+	var bullets = [];
+	var chips = [];
+	var stars = [];
+	var asteroids = [];
+	var previous = [];
+
+    function computeFPS() {
+        if (previous.length > 60) {
+            previous.splice(0, 1);
+        }
+        var start = (new Date).getTime();
+        previous.push(start);
+        var sum = 0;
+
+        for (var id = 0; id < previous.length - 1; id++) {
+            sum += previous[id + 1] - previous[id];
+        }
+
+        return (1000.0 / (sum / previous.length)) >> 0;
+    }
+
+	var asteroid = function(){
+		this.x = Math.random() * ((game_width - 1) - 1) + 1;
+		this.y = Math.random() * game_height;
+		this.size = Math.random() * (50-10) + 10;
+		this.frame = (Math.random() * 29) >> 0;
+		this.speed = (Math.random() * (.4 - .1) + .1) * global_speed;
+	}
+
+	asteroid.prototype = {
+		draw : function(){
+			ctx.drawImage(img_asteroids, (this.frame >> 0) * 90, 0, 90, 116, this.x, this.y, this.size, this.size);
+			this.frame += (this.speed * .4) * global_speed;
+			if(this.frame > 29){
+				this.frame = 0;
+			}
+			
+			this.y+= this.speed;
+			if (this.y >= game_height + 90) {
+				this.y = -90;
+			}
+		},
+	}
+
+	var star = function(){
+		this.x = Math.random() * ((game_width - 1) - 1) + 1;
+		this.y = Math.random() * game_height;
+		this.opacity = Math.random();
+	}
+
+	star.prototype = {
+		draw : function(){
+			ctx.fillStyle= "rgba(255,255,255, "+this.opacity+")";
+			ctx.fillRect(this.x, this.y, 1, 1);
+			
+			this.y++;
+			if (this.y > game_height) {
+				this.y = 0;
+			}
+		},
+	}
+
+	for(var i=0; i < stars_count; i++){
+		stars.push(new star());
+	}
+
+	for(var i=0; i < asteroids_count; i++){
+		asteroids.push(new asteroid());
+	}
+
+	var bullet = function(x, y){
+		this.x = x;
+		this.y = y;
+		this.use = false;
+		this.explosion = false;
+		this.frame = 0;
+	}
+
+	bullet.prototype = {
+		draw : function(){
+			if(this.use){
+				if (this.explosion){
+					ctx.drawImage(img_explode, (this.frame >> 0) * 50, 0, 50, 50, this.x, this.y, 20, 20);
+					this.frame +=.1 * global_speed;
+					if(this.frame > 16){
+						this.frame = 0;
+						this.explosion = false;
+						this.use = false;
+					}
+				} else {
+					ctx.fillStyle="yellow";
+					ctx.fillRect(this.x, this.y, 3, 3);
+				}
+
+				this.y-=  global_speed;
+				if (this.y <= 0) {
+					this.y = game_height;
+					this.use = false;
+				}
+
+				if (!this.explosion){
+			    	for(var i = 0; i < chips.length; i++){
+			    		if(!chips[i].died && !chips[i].explosion) {
+							if ( chips[i].hit(this.x, this.y) ){
+								chips[i].explosion = true;
+								chips[i].health-=10;
+								this.explosion = true;
+							}
+			    		}
+					}
+				}
+			}
+		},
+	}
+
+	var chip = function(sprite, x, y, rot, rotspeed, radius, speed){
+		this.x = (typeof(x) == "undefined") ? Math.random() * ((game_width - sprite_size) - sprite_size) + sprite_size : x;
+		this.y = (typeof(y) == "undefined") ? -(Math.random() * 10) : y;
+		this.right = this.x + sprite_size;
+		this.bottom = this.y + sprite_size;
+		this.rot = (typeof(rot) == "undefined") ? Math.random() * 360 : rot;
+		this.rotspeed = (typeof(rotspeed) == "undefined") ? Math.random() * (.01 - .001) + .001 : rotspeed;
+		this.radius = (typeof(radius) == "undefined") ? Math.random() * (60 - 30) + 30 : radius;
+		this.speed = ((typeof(speed) == "undefined") ? Math.random() * (.6 - .03) + .03 : speed) * global_speed;
+		this.explosion = false;
+		this.frame = 0;
+		this.died = false;
+		this.sprite = (typeof(sprite) == "undefined") ? img_chip : sprite;
+		this.health = 10;
+	}
+
+	chip.prototype = {
+		hit : function(x,y){
+			return x >= this.left && y >= this.top && x <= this.right && y <= this.bottom;
+		},
+		draw : function(){
+			if(this.nodead) this.died = false;
+
+			if(!this.died){
+				this.x = Math.max(0, Math.min(game_width - sprite_size, this.x));
+
+				var x = sin(this.rot) * this.radius + this.x;
+				var y = this.y;
+
+				this.left = x;
+				this.top = y;
+				this.right = x + sprite_size;
+				this.bottom = y + sprite_size;
+
+				if(this.nodead){
+					ctx.drawImage(this.sprite, 0, 0, sprite_size, sprite_size, x, y, sprite_size, sprite_size);	
+				}
+
+				if(!this.nodead && this.health > 0){
+					ctx.fillStyle = '#444';
+					ctx.fillRect(x, y - 10, sprite_size, 3);
+					ctx.fillStyle = 'green';
+					ctx.fillRect(x, y - 10, (sprite_size / 100 * this.health), 3);
+				}
+
+				if(this.health > 0){
+					ctx.drawImage(this.sprite, 0, 0, this.boss ? 40 : sprite_size, this.boss ? 40 : sprite_size, x, y, this.boss ? 40 : sprite_size, this.boss ? 40 : sprite_size);
+				}
+
+				if (this.explosion){
+					ctx.drawImage(img_explode, (this.frame >> 0) * 50, 0, 50, 50, x + (this.nodead ? sprite_size/4 : 0), y - (this.nodead ? 10 : 0), (this.nodead ? 20 : 50), (this.nodead ? 20 : 50));
+					this.frame += (this.nodead ? .5 : .1) * global_speed;
+					if(this.frame > 16){
+						this.frame = 0;
+						this.explosion = false;
+						if (this.health <= 0){
+							this.died = true;
+							died_count++;
+						}
+					}
+				}
+
+				if (this.rot > 360) this.rot = 0;
+				this.rot += this.rotspeed;
+				this.y += this.speed;
+				if (this.y > game_height) this.y = -50;
+			}
+		},
+	}
+
+	for(var i=0; i < chips_count; i++){
+		chips.push(new chip());
+	}
+
+	var chipx = game_width/2;
+	var mainchip = new chip(img_my_chip, chipx, game_height-40, 0, 0, 0, 0);
+	mainchip.nodead = true
+	
+	for(var i=0; i < bullets_count; i++){
+		bullets.push(new bullet(mainchip.x + sprite_size/2, mainchip.y));
+	}
+
+	var carp = null;
+
+	var render = function(ctx, plot){
+		ctx.fillStyle = 'black';
+		ctx.fillRect(0, 0, game_width, game_height);
+
+		if(died_count == chips_count && carp == null){
+			carp = new chip(carp_sprite)
+			carp.health = 100;
+			carp.boss = true;
+			carp.x = game_width / 2;
+			carp.speed = .1 * global_speed;
+			carp.size = 60;
+			chips.push(carp);
+		}
+
+		if (carp && carp.died){
+			ctx.fillStyle = '#fff';
+			ctx.font = "30px Arial";
+			ctx.fillText("Правок нет!", 86, 300);
+		}
+
+		chips.sort(function(a,b){
+			return a.y < b.y;
+		})
+
+		for(var i = 0; i < stars.length; i++){
+			stars[i].draw();
+		}
+
+		for(var i = 0; i < asteroids.length; i++){
+			asteroids[i].draw();
+		}
+
+		for(var i = 0; i < bullets.length; i++){
+			bullets[i].draw();
+		}
+
+		for(var i = 0; i < chips.length; i++){
+			chips[i].draw();
+		}
+
+		bullets.sort(function(a, b){
+			return a.use > b.use
+		});
+
+		for(var i=0; i < 8; i++){
+			if (!bullets[i].use){
+				ctx.fillStyle= "yellow";
+			} else {
+				ctx.fillStyle= "darkgrey";
+			}
+			ctx.fillRect(20 + i * 10, 20, 8, 8);
+		}
+
+		mainchip.draw();
+
+		ctx.fillStyle = '#fff';
+		ctx.font = "11px Arial";
+		ctx.fillText(computeFPS() + ' fps', game_width - 40, 12);
+	}
+
+    window.addEventListener('keyup', function (e) {
+        var intKey = (window.Event) ? e.which : e.charCode;
+        if(intKey == 37 || intKey == 39){
+	        movekey = '';
+        } else if(intKey == 32) {
+        	shotkey = false;
+        }
+    }, false)
+
+    window.addEventListener('keydown', function (e) {
+        var intKey = (window.Event) ? e.which : e.charCode;
+
+        if(intKey == 37){ // left
+        	movekey = 'left'
+        } else if(intKey == 39) { // right
+        	movekey = 'right'
+        } else if(intKey == 32) { // right
+        	shotkey = true
+        	if((new Date()).getTime() - bullets_interval > Math.random() * (300 - 100) + 100 ){
+        		mainchip.explosion = true;
+	        	for(var i=0; i < bullets.length; i++){
+	        		if(!bullets[i].use){
+	        			bullets[i].use = true;
+	        			bullets[i].x = mainchip.x + sprite_size/2;
+	        			bullets[i].y = mainchip.y;
+	        			return;
+	        		}
+	        	}
+	        	
+		        bullets_interval = (new Date()).getTime();
+	        }
+
+        }
+    }, false)
+
+
+    var bullets_interval = 0;
+
+	var animloop = function(){
+	  	requestAnimationFrame(animloop);
+		if(movekey == 'left'){ // left
+			mainchip.x -=  global_speed;
+		} else if(movekey == 'right') { // right
+			mainchip.x +=  global_speed;
+		}
+
+		if(false) { // right
+			if((new Date()).getTime() - bullets_interval > Math.random() * (300 - 50) + 50 ){
+		    	for(var i=0; i < bullets.length; i++){
+		    		if(!bullets[i].use){
+		    			bullets[i].use = true;
+		    			bullets[i].x = mainchip.x + sprite_size/2;
+		    			bullets[i].y = mainchip.y;
+		    			return;
+		    		}
+		    	}
+		    	bullets.push(new bullet(mainchip.x + sprite_size/2, mainchip.y));
+
+		        bullets_interval = (new Date()).getTime();
+		    }
+		}
+
+		render(ctx, plot);
+	}
+
+	animloop();
+
+
+</script>	
+</body>
+</html>
